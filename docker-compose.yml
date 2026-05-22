@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: asakabot_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: asakabot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: asakabot_rmq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  # НОВЫЙ БЛОК: Наш Telegram Бот
+  bot:
+    build: .                 # Говорит Докеру: "Ищи Dockerfile в этой же папке и собери его"
+    container_name: asakabot_app
+    restart: always          # Автоматически перезапускать при падении или перезагрузке сервера
+    depends_on:
+      - postgres             # Бот запустится только ПОСЛЕ того, как запустится БД...
+      - rabbitmq             # ... и брокер очередей
+    env_file:
+      - .env                 # Передаем переменные внутрь контейнера
+    
+volumes:
+  pgdata:
