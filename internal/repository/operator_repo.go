@@ -7,6 +7,7 @@ import (
 // OperatorInfo хранит сводку о сотруднике
 type OperatorInfo struct {
 	Name       string
+	DeptID     int // НОВОЕ ПОЛЕ: номер отдела для перевода
 	DeptName   string
 	Status     string
 	HasSession bool
@@ -15,16 +16,15 @@ type OperatorInfo struct {
 // GetOperatorInfo собирает статистику для профиля
 func GetOperatorInfo(db *sql.DB, tgID int64) OperatorInfo {
 	var info OperatorInfo
-	var deptID int
 
-	// Получаем базовые данные
-	err := db.QueryRow(`SELECT name, department_id, status FROM operators WHERE telegram_id = $1`, tgID).Scan(&info.Name, &deptID, &info.Status)
+	// ОБНОВЛЕНО: Сканируем department_id сразу в info.DeptID
+	err := db.QueryRow(`SELECT name, department_id, status FROM operators WHERE telegram_id = $1`, tgID).Scan(&info.Name, &info.DeptID, &info.Status)
 	if err != nil {
 		return info
 	}
 
-	// Название отдела (перевод ID в текст)
-	switch deptID {
+	// Название отдела (перевод ID в текст по умолчанию для самого оператора)
+	switch info.DeptID {
 	case 1:
 		info.DeptName = "Mahalla bankirlari"
 	case 2:

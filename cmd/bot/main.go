@@ -64,16 +64,29 @@ func main() {
 				langCode := callbackData[5:]
 				repository.UpdateLanguage(db, userID, langCode)
 
-				responseText := i18n.Get(langCode, "msg_lang_changed")
-				bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, responseText))
+				// Проверяем, это регистрация или смена из настроек
+				if !repository.IsUserRegistered(db, userID) {
+					// ЭТО РЕГИСТРАЦИЯ: переводим на шаг ввода имени
+					repository.UpdateUserState(db, userID, "REG_NAME")
 
-				msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, responseText)
-				msg.ReplyMarkup = handlers.MainMenuKeyboard(langCode) // Сразу даем кнопки на новом языке
-				bot.Send(msg)
+					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "")) // Убираем часики загрузки
+
+					// Запрашиваем имя уже на выбранном языке
+					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, i18n.Get(langCode, "msg_reg_name"))
+					msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+					bot.Send(msg)
+				} else {
+					// ОБЫЧНАЯ СМЕНА В НАСТРОЙКАХ
+					responseText := i18n.Get(langCode, "msg_lang_changed")
+					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, responseText))
+
+					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, responseText)
+					msg.ReplyMarkup = handlers.MainMenuKeyboard(langCode)
+					bot.Send(msg)
+				}
 				continue
 			}
 
-			// 2. Принятие чата оператором
 			// 2. Принятие чата оператором
 			if len(callbackData) >= 7 && callbackData[:7] == "accept_" {
 				clientIDStr := callbackData[7:]
@@ -84,13 +97,29 @@ func main() {
 				if err == nil {
 					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "Чат принят!"))
 
-					// Получаем данные оператора для красивого приветствия
-					opInfo := repository.GetOperatorInfo(db, operatorID)
-					greeting := "Здравствуйте! Я " + opInfo.Name + " из отдела «" + opInfo.DeptName + "».\nОпишите Вашу проблему или задайте вопрос, чтобы я смог Вам помочь."
+					// 1. Узнаем язык КЛИЕНТА
+					clientLang := repository.GetUserLang(db, clientID)
 
+					// 2. Получаем данные оператора
+					opInfo := repository.GetOperatorInfo(db, operatorID)
+
+					// 3. Берем правильный перевод названия отдела из словаря i18n
+					deptKey := "dept_" + strconv.Itoa(opInfo.DeptID)
+					localizedDeptName := i18n.Get(clientLang, deptKey)
+
+					// 4. Формируем приветствие на языке клиента
+					var greeting string
+					if clientLang == "uz" {
+						greeting = "Assalomu alaykum! Men «" + localizedDeptName + "» bo'limidan " + opInfo.Name + "man.\nSizga yordam bera olishim uchun muammoyingizni tasvirlab bering yoki savolingizni yo'llang."
+					} else {
+						greeting = "Здравствуйте! Я " + opInfo.Name + " из отдела «" + localizedDeptName + "».\nОпишите Вашу проблему или задайте вопрос, чтобы я смог Вам помочь."
+					}
+
+					// 5. Отправляем системное уведомление и приветствие клиенту
+					bot.Send(tgbotapi.NewMessage(clientID, i18n.Get(clientLang, "msg_op_connected")))
 					bot.Send(tgbotapi.NewMessage(clientID, greeting))
 
-					// Уведомляем оператора и оставляем ему ТОЛЬКО кнопку завершения
+					// 6. Уведомляем оператора и меняем ему клавиатуру
 					opMsg := tgbotapi.NewMessage(operatorID, "🟢 Вы успешно приняли чат! Клиенту отправлено авто-приветствие.")
 					opMsg.ReplyMarkup = handlers.OperatorInChatKeyboard()
 					bot.Send(opMsg)
@@ -122,17 +151,17 @@ func main() {
 		// ===== ОБРАБОТКА КОМАНДЫ /start =====
 		if update.Message.Command() == "start" {
 			if isOp {
-				// Узнаем текущий статус, чтобы выдать правильные кнопки
-				opInfo := repository.GetOperatorInfo(db, userID)
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "👨‍💻 Добро пожаловать в панель оператора! Выберите действие:")
-				msg.ReplyMarkup = handlers.OperatorMenuKeyboard(opInfo.Status)
+				msg.ReplyMarkup = handlers.OperatorMenuKeyboard(repository.GetOperatorInfo(db, userID).Status)
 				bot.Send(msg)
 			} else {
 				// Если клиент не зарегистрирован — начинаем процесс
 				if !repository.IsUserRegistered(db, userID) {
-					repository.UpdateUserState(db, userID, "REG_NAME")
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, i18n.Get(lang, "msg_reg_name"))
-					msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true) // Прячем все кнопки
+					repository.UpdateUserState(db, userID, "REG_LANG") // НОВОЕ СОСТОЯНИЕ
+
+					// Двуязычное сообщение
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выберите язык интерфейса / Interfeys tilini tanlang:")
+					msg.ReplyMarkup = handlers.SettingsInlineKeyboard() // Выдаем инлайн-кнопки
 					bot.Send(msg)
 				} else {
 					repository.UpdateUserState(db, userID, "MAIN_MENU")
@@ -153,7 +182,6 @@ func main() {
 					bot.Send(tgbotapi.NewMessage(userID, "🔴 Вы завершили диалог."))
 					bot.Send(tgbotapi.NewMessage(partnerID, "🔴 Собеседник завершил диалог. Сессия закрыта."))
 
-					// Обновляем меню собеседнику
 					// Обновляем меню собеседнику
 					if repository.IsOperator(db, partnerID) {
 						msg := tgbotapi.NewMessage(partnerID, "Вы снова ONLINE. Ожидайте новых запросов.")
@@ -186,7 +214,6 @@ func main() {
 			}
 		}
 
-		// ===== ЛОГИКА ДЛЯ ОПЕРАТОРОВ (БЕЗ АКТИВНОГО ЧАТА) =====
 		// ===== ЛОГИКА ДЛЯ ОПЕРАТОРОВ (БЕЗ АКТИВНОГО ЧАТА) =====
 		if isOp {
 			switch update.Message.Text {
@@ -228,6 +255,14 @@ func main() {
 		}
 
 		// ===== FSM РЕГИСТРАЦИИ КЛИЕНТА =====
+		if state == "REG_LANG" {
+			// Если клиент что-то пишет вместо нажатия кнопки языка
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Пожалуйста, выберите язык, нажав на кнопку ниже ⬇️\nIltimos, pastdagi tugmani bosib tilni tanlang ⬇️")
+			msg.ReplyMarkup = handlers.SettingsInlineKeyboard()
+			bot.Send(msg)
+			continue
+		}
+
 		if state == "REG_NAME" {
 			repository.UpdateUserRegistrationName(db, userID, update.Message.Text)
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, i18n.Get(lang, "msg_reg_phone"))

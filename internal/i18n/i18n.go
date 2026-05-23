@@ -23,6 +23,7 @@ var T = map[string]map[string]string{
 		"msg_contacts":     "Свяжитесь с нами:\n📞 Телефон: +998 71 123-45-67\n📧 Email: info@asakabank.uz",
 		"msg_select_dept":  "Выберите отдел для связи со специалистом:",
 		"msg_default_text": "Пожалуйста, используйте кнопки меню внизу экрана.",
+		"msg_op_connected": "🟢 Оператор подключился! Теперь все Ваши сообщения будут отправляться ему. Чтобы завершить чат, отправьте /start",
 
 		// Регистрация
 		"msg_reg_name":    "Добро пожаловать! Для продолжения, пожалуйста, введите Ваши реальные Имя и Фамилию:",
@@ -50,6 +51,7 @@ var T = map[string]map[string]string{
 		"msg_contacts":     "Biz bilan bog'lanish:\n📞 Telefon: +998 71 123-45-67\n📧 Email: info@asakabank.uz",
 		"msg_select_dept":  "Mutaxassis bilan bog'lanish uchun bo'limni tanlang:",
 		"msg_default_text": "Iltimos, ekranning pastki qismidagi menyu tugmalaridan foydalaning.",
+		"msg_op_connected": "🟢 Operator ulandi! Endi barcha xabarlaringiz unga yuboriladi. Chatni yakunlash uchun /start ni yuboring",
 
 		// Регистрация
 		"msg_reg_name":    "Xush kelibsiz! Davom etish uchun iltimos, haqiqiy Ism va Familiyangizni kiriting:",
