@@ -6,7 +6,6 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// MainMenuKeyboard создает главное меню на основе выбранного языка
 func MainMenuKeyboard(lang string) tgbotapi.ReplyKeyboardMarkup {
 	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
@@ -15,7 +14,7 @@ func MainMenuKeyboard(lang string) tgbotapi.ReplyKeyboardMarkup {
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton(i18n.Get(lang, "btn_support")),
-			tgbotapi.NewKeyboardButton(i18n.Get(lang, "btn_news")),
+			tgbotapi.NewKeyboardButton(i18n.Get(lang, "btn_about")),
 		),
 	)
 	keyboard.ResizeKeyboard = true
@@ -86,6 +85,24 @@ func OperatorInChatKeyboard() tgbotapi.ReplyKeyboardMarkup {
 	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("❌ Завершить текущий чат"),
+		),
+	)
+	keyboard.ResizeKeyboard = true
+	return keyboard
+}
+
+func AdminMenuKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	keyboard := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("➕ Добавить оператора"),
+			tgbotapi.NewKeyboardButton("➖ Удалить оператора"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("📊 Статистика"),
+			tgbotapi.NewKeyboardButton("🚦 Управление статусами"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("🔙 Выйти из панели"),
 		),
 	)
 	keyboard.ResizeKeyboard = true

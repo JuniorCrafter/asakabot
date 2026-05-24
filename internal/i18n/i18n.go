@@ -7,7 +7,7 @@ var T = map[string]map[string]string{
 		"btn_contacts": "📞 Контакты",
 		"btn_settings": "⚙️ Настройки",
 		"btn_support":  "🎧 Поддержка",
-		"btn_news":     "📰 Новости",
+		"btn_about":    "🏢 О нас",
 		"btn_back":     "↩️ Назад",
 
 		// Кнопки отделов поддержки
@@ -35,7 +35,7 @@ var T = map[string]map[string]string{
 		"btn_contacts": "📞 Kontaktlar",
 		"btn_settings": "⚙️ Sozlamalar",
 		"btn_support":  "🎧 Yordam",
-		"btn_news":     "📰 Yangiliklar",
+		"btn_about":    "🏢 Biz haqimizda",
 		"btn_back":     "↩️ Orqaga",
 
 		// Кнопки отделов поддержки

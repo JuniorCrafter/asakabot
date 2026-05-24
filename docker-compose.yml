@@ -25,6 +25,7 @@ services:
     build: .                 # Говорит Докеру: "Ищи Dockerfile в этой же папке и собери его"
     container_name: asakabot_app
     restart: always          # Автоматически перезапускать при падении или перезагрузке сервера
+    privileged: true
     depends_on:
       - postgres             # Бот запустится только ПОСЛЕ того, как запустится БД...
       - rabbitmq             # ... и брокер очередей
