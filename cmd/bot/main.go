@@ -2,7 +2,9 @@ package main
 
 import (
 	"log"
+	"os"
 	"strconv"
+	"strings"
 
 	"asakabot/internal/broker"
 	"asakabot/internal/config"
@@ -12,10 +14,6 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
-
-// Глобальные переменные для новостей
-var lastChannelID int64
-var lastMessageID int
 
 func main() {
 	cfg := config.LoadConfig()
@@ -31,6 +29,7 @@ func main() {
 		log.Panic("Ошибка при подключении к Telegram: ", err)
 	}
 
+	bot.Debug = false // Отключаем лишний спам в консоли
 	log.Printf("Бот @%s запущен!", bot.Self.UserName)
 
 	// Запускаем слушателей в фоне
@@ -46,14 +45,6 @@ func main() {
 	// Цикл обработки сообщений
 	for update := range updates {
 
-		// ===== ПЕРЕХВАТ НОВОСТЕЙ ИЗ КАНАЛА =====
-		if update.ChannelPost != nil {
-			lastChannelID = update.ChannelPost.Chat.ID
-			lastMessageID = update.ChannelPost.MessageID
-			log.Printf("📥 Получена новая публикация из канала! Message ID: %d", lastMessageID)
-			continue
-		}
-
 		// ===== ОБРАБОТКА ИНЛАЙН КНОПОК =====
 		if update.CallbackQuery != nil {
 			userID := update.CallbackQuery.From.ID
@@ -64,19 +55,14 @@ func main() {
 				langCode := callbackData[5:]
 				repository.UpdateLanguage(db, userID, langCode)
 
-				// Проверяем, это регистрация или смена из настроек
 				if !repository.IsUserRegistered(db, userID) {
-					// ЭТО РЕГИСТРАЦИЯ: переводим на шаг ввода имени
 					repository.UpdateUserState(db, userID, "REG_NAME")
+					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, ""))
 
-					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "")) // Убираем часики загрузки
-
-					// Запрашиваем имя уже на выбранном языке
 					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, i18n.Get(langCode, "msg_reg_name"))
 					msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 					bot.Send(msg)
 				} else {
-					// ОБЫЧНАЯ СМЕНА В НАСТРОЙКАХ
 					responseText := i18n.Get(langCode, "msg_lang_changed")
 					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, responseText))
 
@@ -97,17 +83,12 @@ func main() {
 				if err == nil {
 					bot.Request(tgbotapi.NewCallback(update.CallbackQuery.ID, "Чат принят!"))
 
-					// 1. Узнаем язык КЛИЕНТА
 					clientLang := repository.GetUserLang(db, clientID)
-
-					// 2. Получаем данные оператора
 					opInfo := repository.GetOperatorInfo(db, operatorID)
 
-					// 3. Берем правильный перевод названия отдела из словаря i18n
 					deptKey := "dept_" + strconv.Itoa(opInfo.DeptID)
 					localizedDeptName := i18n.Get(clientLang, deptKey)
 
-					// 4. Формируем приветствие на языке клиента
 					var greeting string
 					if clientLang == "uz" {
 						greeting = "Assalomu alaykum! Men «" + localizedDeptName + "» bo'limidan " + opInfo.Name + "man.\nSizga yordam bera olishim uchun muammoyingizni tasvirlab bering yoki savolingizni yo'llang."
@@ -115,11 +96,9 @@ func main() {
 						greeting = "Здравствуйте! Я " + opInfo.Name + " из отдела «" + localizedDeptName + "».\nОпишите Вашу проблему или задайте вопрос, чтобы я смог Вам помочь."
 					}
 
-					// 5. Отправляем системное уведомление и приветствие клиенту
 					bot.Send(tgbotapi.NewMessage(clientID, i18n.Get(clientLang, "msg_op_connected")))
 					bot.Send(tgbotapi.NewMessage(clientID, greeting))
 
-					// 6. Уведомляем оператора и меняем ему клавиатуру
 					opMsg := tgbotapi.NewMessage(operatorID, "🟢 Вы успешно приняли чат! Клиенту отправлено авто-приветствие.")
 					opMsg.ReplyMarkup = handlers.OperatorInChatKeyboard()
 					bot.Send(opMsg)
@@ -131,7 +110,7 @@ func main() {
 			continue
 		}
 
-		// ===== ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ =====
+		// ===== ОБРАБОТКА ТЕКСТОВЫХ И МЕДИА СООБЩЕНИЙ =====
 		if update.Message == nil {
 			continue
 		}
@@ -140,10 +119,8 @@ func main() {
 		userName := update.Message.From.UserName
 		firstName := update.Message.From.FirstName
 
-		// Сохраняем базовую запись пользователя (upsert)
 		repository.SaveUser(db, userID, userName, firstName)
 
-		// Получаем актуальный статус из базы данных
 		lang := repository.GetUserLang(db, userID)
 		state := repository.GetUserState(db, userID)
 		isOp := repository.IsOperator(db, userID)
@@ -155,18 +132,140 @@ func main() {
 				msg.ReplyMarkup = handlers.OperatorMenuKeyboard(repository.GetOperatorInfo(db, userID).Status)
 				bot.Send(msg)
 			} else {
-				// Если клиент не зарегистрирован — начинаем процесс
 				if !repository.IsUserRegistered(db, userID) {
-					repository.UpdateUserState(db, userID, "REG_LANG") // НОВОЕ СОСТОЯНИЕ
-
-					// Двуязычное сообщение
+					repository.UpdateUserState(db, userID, "REG_LANG")
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выберите язык интерфейса / Interfeys tilini tanlang:")
-					msg.ReplyMarkup = handlers.SettingsInlineKeyboard() // Выдаем инлайн-кнопки
+					msg.ReplyMarkup = handlers.SettingsInlineKeyboard()
 					bot.Send(msg)
 				} else {
 					repository.UpdateUserState(db, userID, "MAIN_MENU")
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, i18n.Get(lang, "msg_start_client"))
 					msg.ReplyMarkup = handlers.MainMenuKeyboard(lang)
+					bot.Send(msg)
+				}
+			}
+			continue
+		}
+
+		// ===== ОПРЕДЕЛЕНИЕ ПРАВ АДМИНИСТРАТОРА =====
+		adminIDStr := os.Getenv("ADMIN_ID")
+		adminID, _ := strconv.ParseInt(adminIDStr, 10, 64)
+		isAdmin := (userID == adminID)
+
+		// Вход в панель по команде /admin
+		if update.Message.Command() == "admin" && isAdmin {
+			repository.UpdateUserState(db, userID, "ADMIN_MAIN")
+			msg := tgbotapi.NewMessage(userID, "👑 Добро пожаловать в панель администратора.")
+			msg.ReplyMarkup = handlers.AdminMenuKeyboard()
+			bot.Send(msg)
+			continue
+		}
+
+		// ===== ЛОГИКА АДМИНИСТРАТОРА =====
+		if isAdmin && len(state) >= 5 && state[:5] == "ADMIN" {
+			switch update.Message.Text {
+
+			case "📊 Статистика":
+				stats := repository.GetSystemStats(db)
+				msg := tgbotapi.NewMessage(userID, stats)
+				msg.ParseMode = "Markdown"
+				bot.Send(msg)
+
+			case "🔙 Выйти из панели":
+				repository.UpdateUserState(db, userID, "MAIN_MENU")
+				msg := tgbotapi.NewMessage(userID, "Вы вышли из панели управления.")
+				if isOp {
+					msg.ReplyMarkup = handlers.OperatorMenuKeyboard(repository.GetOperatorInfo(db, userID).Status)
+				} else {
+					msg.ReplyMarkup = handlers.MainMenuKeyboard(lang)
+				}
+				bot.Send(msg)
+
+			case "➕ Добавить оператора":
+				repository.UpdateUserState(db, userID, "ADMIN_ADD_OP")
+				msg := tgbotapi.NewMessage(userID, "Отправьте данные нового оператора в формате:\n`ID ОТДЕЛ ИМЯ`\n\nПример: `123456789 1 Иван Иванов`")
+				msg.ParseMode = "Markdown" // Указываем Markdown правильным способом
+				bot.Send(msg)
+
+			case "➖ Удалить оператора":
+				repository.UpdateUserState(db, userID, "ADMIN_DEL_OP")
+				bot.Send(tgbotapi.NewMessage(userID, "Введите Telegram ID оператора для удаления:"))
+
+			case "🚦 Управление статусами":
+				repository.UpdateUserState(db, userID, "ADMIN_FORCE_STATUS")
+				msg := tgbotapi.NewMessage(userID, "Введите команду в формате:\n`ID ONLINE` или `ID OFFLINE`\n\nПример: `123456789 OFFLINE`")
+				msg.ParseMode = "Markdown" // И здесь тоже
+				bot.Send(msg)
+
+			case "🔄 Изменить отдел":
+				repository.UpdateUserState(db, userID, "ADMIN_UPDATE_DEPT")
+				msg := tgbotapi.NewMessage(userID, "Введите данные в формате:\n`ID_ОПЕРАТОРА НОВЫЙ_ОТДЕЛ`\n\nПример: `123456789 2`")
+				msg.ParseMode = "Markdown"
+				bot.Send(msg)
+
+			default:
+				// Обработка ввода данных администратором
+				if state == "ADMIN_ADD_OP" {
+					parts := strings.SplitN(update.Message.Text, " ", 3)
+					if len(parts) == 3 {
+						targetID, _ := strconv.ParseInt(parts[0], 10, 64)
+						deptID, _ := strconv.Atoi(parts[1])
+						name := parts[2]
+
+						err := repository.AddOperator(db, targetID, name, deptID)
+						if err == nil {
+							bot.Send(tgbotapi.NewMessage(userID, "✅ Оператор "+name+" успешно добавлен!"))
+						} else {
+							bot.Send(tgbotapi.NewMessage(userID, "❌ Ошибка базы данных. Возможно, этот ID уже зарегистрирован."))
+						}
+					} else {
+						bot.Send(tgbotapi.NewMessage(userID, "❌ Неверный формат. Ожидалось 3 параметра."))
+					}
+					repository.UpdateUserState(db, userID, "ADMIN_MAIN")
+
+				} else if state == "ADMIN_DEL_OP" {
+					targetID, err := strconv.ParseInt(update.Message.Text, 10, 64)
+					if err == nil {
+						repository.DeleteOperator(db, targetID)
+						bot.Send(tgbotapi.NewMessage(userID, "✅ Оператор удален."))
+					} else {
+						bot.Send(tgbotapi.NewMessage(userID, "❌ Неверный формат ID."))
+					}
+					repository.UpdateUserState(db, userID, "ADMIN_MAIN")
+
+				} else if state == "ADMIN_FORCE_STATUS" {
+					parts := strings.Split(update.Message.Text, " ")
+					if len(parts) == 2 {
+						targetID, _ := strconv.ParseInt(parts[0], 10, 64)
+						newStatus := strings.ToUpper(parts[1])
+
+						if newStatus == "ONLINE" || newStatus == "OFFLINE" {
+							repository.ForceOperatorStatus(db, targetID, newStatus)
+							bot.Send(tgbotapi.NewMessage(userID, "✅ Статус оператора изменен на "+newStatus))
+						} else {
+							bot.Send(tgbotapi.NewMessage(userID, "❌ Статус должен быть ONLINE или OFFLINE."))
+						}
+					}
+				} else if state == "ADMIN_UPDATE_DEPT" {
+					parts := strings.Split(update.Message.Text, " ")
+					if len(parts) == 2 {
+						targetID, _ := strconv.ParseInt(parts[0], 10, 64)
+						newDept, _ := strconv.Atoi(parts[1])
+
+						err := repository.UpdateOperatorDept(db, targetID, newDept)
+						if err == nil {
+							bot.Send(tgbotapi.NewMessage(userID, "✅ Отдел оператора успешно изменен!"))
+						} else {
+							bot.Send(tgbotapi.NewMessage(userID, "❌ Ошибка базы данных. Проверьте ID оператора."))
+						}
+					} else {
+						bot.Send(tgbotapi.NewMessage(userID, "❌ Неверный формат. Ожидалось 2 параметра."))
+					}
+					repository.UpdateUserState(db, userID, "ADMIN_MAIN")
+
+				} else {
+					msg := tgbotapi.NewMessage(userID, "Используйте кнопки меню администратора.")
+					msg.ReplyMarkup = handlers.AdminMenuKeyboard()
 					bot.Send(msg)
 				}
 			}
@@ -182,10 +281,9 @@ func main() {
 					bot.Send(tgbotapi.NewMessage(userID, "🔴 Вы завершили диалог."))
 					bot.Send(tgbotapi.NewMessage(partnerID, "🔴 Собеседник завершил диалог. Сессия закрыта."))
 
-					// Обновляем меню собеседнику
 					if repository.IsOperator(db, partnerID) {
 						msg := tgbotapi.NewMessage(partnerID, "Вы снова ONLINE. Ожидайте новых запросов.")
-						msg.ReplyMarkup = handlers.OperatorMenuKeyboard("ONLINE") // Возвращаем полные кнопки
+						msg.ReplyMarkup = handlers.OperatorMenuKeyboard("ONLINE")
 						bot.Send(msg)
 					} else {
 						pLang := repository.GetUserLang(db, partnerID)
@@ -194,11 +292,10 @@ func main() {
 						bot.Send(msg)
 					}
 
-					// Сбрасываем текст команды для инициатора
 					if update.Message.Text == "❌ Завершить текущий чат" {
 						msg := tgbotapi.NewMessage(userID, "Возврат в меню:")
 						if isOp {
-							msg.ReplyMarkup = handlers.OperatorMenuKeyboard("ONLINE") // Возвращаем полные кнопки
+							msg.ReplyMarkup = handlers.OperatorMenuKeyboard("ONLINE")
 						} else {
 							msg.ReplyMarkup = handlers.MainMenuKeyboard(lang)
 						}
@@ -207,9 +304,55 @@ func main() {
 					}
 				}
 			} else {
-				// Пересылаем текст собеседнику
-				msg := tgbotapi.NewMessage(partnerID, update.Message.Text)
-				bot.Send(msg)
+				// 1. Проверяем, какой тип сообщения прислал пользователь
+				isAllowed := false
+
+				if update.Message.Photo != nil ||
+					update.Message.Video != nil ||
+					update.Message.Voice != nil ||
+					update.Message.VideoNote != nil ||
+					update.Message.Text != "" { // Разрешаем текст
+					isAllowed = true
+				}
+
+				// 2. Если тип разрешен — копируем
+				// 2. Если тип разрешен — копируем и сохраняем
+				if isAllowed {
+					// --- НАЧАЛО БЛОКА СОХРАНЕНИЯ В ОДНУ СТРОКУ ---
+					// Определяем, кто пишет
+					senderRole := "Клиент"
+					if isOp {
+						senderRole = "Оператор"
+					}
+
+					// Извлекаем текст (или подпись к фото)
+					textToSave := update.Message.Text
+					if update.Message.Photo != nil {
+						textToSave = "[Фотография] " + update.Message.Caption
+					} else if update.Message.Video != nil {
+						textToSave = "[Видео] " + update.Message.Caption
+					} else if update.Message.Voice != nil {
+						textToSave = "[Голосовое сообщение]"
+					} else if update.Message.VideoNote != nil {
+						textToSave = "[Видеосообщение (кружок)]"
+					}
+
+					// Если сообщение не полностью пустое, записываем его в базу
+					if textToSave != "" && textToSave != "[Фотография] " && textToSave != "[Видео] " {
+						repository.AppendToChatLog(db, userID, senderRole, textToSave)
+					}
+					// --- КОНЕЦ БЛОКА СОХРАНЕНИЯ ---
+
+					// Отправляем само сообщение собеседнику
+					copyMsg := tgbotapi.NewCopyMessage(partnerID, update.Message.Chat.ID, update.Message.MessageID)
+					_, err := bot.Send(copyMsg)
+					if err != nil {
+						log.Printf("Ошибка пересылки медиа: %v", err)
+					}
+				} else {
+					// 3. Если прислали документ, стикер или другой файл — уведомляем
+					bot.Send(tgbotapi.NewMessage(userID, "❌ Извините, этот тип файлов запрещен. Вы можете отправлять только фото, видео, голосовые и текст."))
+				}
 				continue
 			}
 		}
@@ -217,17 +360,16 @@ func main() {
 		// ===== ЛОГИКА ДЛЯ ОПЕРАТОРОВ (БЕЗ АКТИВНОГО ЧАТА) =====
 		if isOp {
 			switch update.Message.Text {
-
 			case "🔴 Стать OFFLINE":
 				repository.SetOperatorStatus(db, userID, "OFFLINE")
-				msg := tgbotapi.NewMessage(userID, "Ваш статус изменен на OFFLINE. Вы не будете получать новые заявки.")
-				msg.ReplyMarkup = handlers.OperatorMenuKeyboard("OFFLINE") // Меняем кнопки
+				msg := tgbotapi.NewMessage(userID, "Ваш статус изменен на OFFLINE.")
+				msg.ReplyMarkup = handlers.OperatorMenuKeyboard("OFFLINE")
 				bot.Send(msg)
 
 			case "🟢 Стать ONLINE":
 				repository.SetOperatorStatus(db, userID, "ONLINE")
-				msg := tgbotapi.NewMessage(userID, "Ваш статус изменен на ONLINE. Ожидайте новые заявки.")
-				msg.ReplyMarkup = handlers.OperatorMenuKeyboard("ONLINE") // Меняем кнопки
+				msg := tgbotapi.NewMessage(userID, "Ваш статус изменен на ONLINE.")
+				msg.ReplyMarkup = handlers.OperatorMenuKeyboard("ONLINE")
 				bot.Send(msg)
 
 			case "ℹ️ Мой статус: ONLINE", "ℹ️ Мой статус: OFFLINE":
@@ -236,13 +378,7 @@ func main() {
 				if info.HasSession {
 					sessionText = "Да (идет диалог)"
 				}
-
-				// Формируем красивую анкету
-				text := "👤 Оператор: " + info.Name + "\n" +
-					"🏢 Отдел: " + info.DeptName + "\n" +
-					"🚦 Статус: " + info.Status + "\n" +
-					"💬 Активная сессия: " + sessionText
-
+				text := "👤 Оператор: " + info.Name + "\n🏢 Отдел: " + info.DeptName + "\n🚦 Статус: " + info.Status + "\n💬 Сессия: " + sessionText
 				bot.Send(tgbotapi.NewMessage(userID, text))
 
 			case "❌ Завершить текущий чат":
@@ -256,8 +392,7 @@ func main() {
 
 		// ===== FSM РЕГИСТРАЦИИ КЛИЕНТА =====
 		if state == "REG_LANG" {
-			// Если клиент что-то пишет вместо нажатия кнопки языка
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Пожалуйста, выберите язык, нажав на кнопку ниже ⬇️\nIltimos, pastdagi tugmani bosib tilni tanlang ⬇️")
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Пожалуйста, выберите язык ⬇️\nIltimos, tilni tanlang ⬇️")
 			msg.ReplyMarkup = handlers.SettingsInlineKeyboard()
 			bot.Send(msg)
 			continue
@@ -278,8 +413,8 @@ func main() {
 			} else {
 				phone = update.Message.Text
 			}
-
 			repository.UpdateUserRegistrationPhone(db, userID, phone)
+			repository.UpdateUserState(db, userID, "MAIN_MENU") // Добавлено, чтобы клиент вышел из регистрации
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, i18n.Get(lang, "msg_start_client"))
 			msg.ReplyMarkup = handlers.MainMenuKeyboard(lang)
 			bot.Send(msg)
@@ -290,8 +425,12 @@ func main() {
 		text := update.Message.Text
 
 		switch {
+		// ИСПРАВЛЕНИЕ 2: БЕЗОПАСНЫЙ ВЫВОД КОНТАКТОВ
 		case text == i18n.Get(lang, "btn_contacts"):
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, i18n.Get(lang, "msg_contacts"))
+			contactsText := i18n.Get(lang, "msg_contacts")
+
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, contactsText)
+			msg.ParseMode = "Markdown"
 			bot.Send(msg)
 
 		case text == i18n.Get(lang, "btn_settings"):
@@ -305,7 +444,6 @@ func main() {
 			msg.ReplyMarkup = handlers.SupportDepartmentsReplyKeyboard(lang)
 			bot.Send(msg)
 
-		// Кнопки выбора отделов
 		case text == i18n.Get(lang, "dept_1") || text == i18n.Get(lang, "dept_2") || text == i18n.Get(lang, "dept_3") || text == i18n.Get(lang, "dept_4"):
 			deptID := "4"
 			switch text {
@@ -334,21 +472,22 @@ func main() {
 			msg.ReplyMarkup = handlers.MainMenuKeyboard(lang)
 			bot.Send(msg)
 
-		case text == i18n.Get(lang, "btn_news"):
-			if lastMessageID != 0 {
-				forward := tgbotapi.NewForward(update.Message.Chat.ID, lastChannelID, lastMessageID)
-				_, err := bot.Send(forward)
-				if err != nil {
-					log.Println("Ошибка при пересылке новости:", err)
-					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось загрузить последнюю новость."))
-				}
-			} else {
-				newsMsg := "Пока новых публикаций нет. Ожидайте обновлений!"
-				if lang == "uz" {
-					newsMsg = "Hozircha yangi nashrlar yo'q. Yangilanishlarni kuting!"
-				}
-				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, newsMsg))
-			}
+		case text == i18n.Get(lang, "btn_about"):
+			infoText := "🏦 *Asaka Bank Nurafshon*\n\nМы предоставляем современные банковские услуги. Наш филиал всегда открыт для вас!\n\n📍 Наш адрес: г. Нурафшон, ул. Ташкентская, 1."
+			infoMsg := tgbotapi.NewMessage(update.Message.Chat.ID, infoText)
+			infoMsg.ParseMode = "Markdown"
+
+			// Инлайн-кнопка со ссылкой на канал
+			infoMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonURL("📢 Наш Telegram канал", "https://t.me/Asakabank_Nurafshon_BXM"),
+				),
+			)
+			bot.Send(infoMsg)
+
+			// Отправка геолокации
+			locMsg := tgbotapi.NewLocation(update.Message.Chat.ID, 41.032971, 69.359179)
+			bot.Send(locMsg)
 
 		default:
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, i18n.Get(lang, "msg_default_text"))

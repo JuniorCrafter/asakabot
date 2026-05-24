@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"asakabot/internal/repository"
 
@@ -37,7 +38,8 @@ func StartConsumer(conn *amqp.Connection, deptID string, bot *tgbotapi.BotAPI, d
 		return
 	}
 
-	msgs, err := ch.Consume(qName, "", true, false, false, false, nil)
+	// ВАЖНО: autoAck теперь false! Мы сами скажем RabbitMQ, когда удалять сообщение
+	msgs, err := ch.Consume(qName, "", false, false, false, false, nil)
 	if err != nil {
 		log.Printf("Ошибка Consumer: %v", err)
 		return
@@ -47,17 +49,27 @@ func StartConsumer(conn *amqp.Connection, deptID string, bot *tgbotapi.BotAPI, d
 
 	for d := range msgs {
 		var ticket TicketMessage
-		json.Unmarshal(d.Body, &ticket)
-
-		// 1. Находим всех операторов этого отдела, которые сейчас ONLINE
-		operators := repository.GetOnlineOperators(db, ticket.DepartmentID)
-
-		if len(operators) == 0 {
-			log.Printf("⚠️ Нет доступных операторов для отдела %s", ticket.DepartmentID)
+		err := json.Unmarshal(d.Body, &ticket)
+		if err != nil {
+			d.Ack(false) // Если сообщение битое, удаляем его, чтобы не засорять очередь
 			continue
 		}
 
-		// 2. Формируем сообщение для оператора с кнопкой "Принять"
+		operators := repository.GetOnlineOperators(db, ticket.DepartmentID)
+
+		// ЛОГИКА: Если нет свободных операторов
+		if len(operators) == 0 {
+			// Возвращаем в очередь
+			d.Nack(false, true)
+			// ВАЖНО: Пауза должна быть больше, чем время обновления статуса в БД
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// Если операторы ЕСТЬ, мы берем только ОДНОГО из них (первого свободного)
+		// чтобы не спамить всех подряд.
+		targetOpID := operators[0]
+
 		text := fmt.Sprintf("🔔 НОВЫЙ ЗАПРОС!\nКлиент ID: %d ожидает ответа.", ticket.UserID)
 		acceptButton := tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
@@ -65,15 +77,17 @@ func StartConsumer(conn *amqp.Connection, deptID string, bot *tgbotapi.BotAPI, d
 			),
 		)
 
-		// 3. Рассылаем это уведомление всем найденным операторам
-		for _, opID := range operators {
-			msg := tgbotapi.NewMessage(opID, text)
-			msg.ReplyMarkup = acceptButton
+		msg := tgbotapi.NewMessage(targetOpID, text)
+		msg.ReplyMarkup = acceptButton
 
-			_, err := bot.Send(msg)
-			if err != nil {
-				log.Printf("Не удалось отправить тикет оператору %d: %v", opID, err)
-			}
+		_, err = bot.Send(msg)
+		if err != nil {
+			// Если бот не смог отправить сообщение оператору (например, он заблокировал бота),
+			// возвращаем заявку в очередь
+			d.Nack(false, true)
+		} else {
+			// Успешно отправили — удаляем из очереди
+			d.Ack(false)
 		}
 	}
 }

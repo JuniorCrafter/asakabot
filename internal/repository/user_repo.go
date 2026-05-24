@@ -134,3 +134,9 @@ func UpdateUserRegistrationPhone(db *sql.DB, userID int64, phone string) error {
 	_, err := db.Exec("UPDATE users SET phone = $1, bot_state = 'MAIN_MENU' WHERE id = $2", phone, userID)
 	return err
 }
+
+// Обновляет имя пользователя после ввода
+func UpdateUserName(db *sql.DB, telegramID int64, name string) error {
+	_, err := db.Exec(`UPDATE users SET first_name = $1 WHERE telegram_id = $2`, name, telegramID)
+	return err
+}
